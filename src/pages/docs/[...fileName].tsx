@@ -1,7 +1,7 @@
 import renderToString from "next-mdx-remote/render-to-string";
 import hydrate from "next-mdx-remote/hydrate";
 import path from "path";
-import { listMdxFiles } from "@vulcanjs/mdx";
+//import { listMdxPaths, listMdxFilesRecursive } from "@vulcanjs/mdx";
 import { promises as fsPromises } from "fs";
 import { Link, Typography } from "@material-ui/core";
 
@@ -13,6 +13,12 @@ import { muiMdComponents } from "~/components/layout/muiMdComponents";
 //
 // You can also replace HTML tags (components is passed to MDXProvider )
 // @see https://mdxjs.com/table-of-components
+type MdxPath = {
+  params: {
+    fileName: Array<String>
+  }
+}
+
 const components = {
   //Test,
   ...muiMdComponents,
@@ -47,22 +53,60 @@ export default function DocPage({ source, frontMatter /*, filePath*/ }) {
 
 export async function getStaticPaths() {
   const docsDir = path.resolve("./src/content/docs"); // relative to the project root
-  // TODO: doesn't handle nesting yet, we suppose the file are locaed at the root
-  const files = await listMdxFiles({ dir: docsDir });
-  const pageNames = files.map((f) =>
-    f.fileName.split(".").slice(0, -1).join(".")
-  );
-  // path is the file without the extension
-  const paths = pageNames.map((name) => ({ params: { fileName: [name] } }));
+  //const files = await listMdxPaths({ dir: docsDir });
+  
+  let paths: MdxPath[] = [];
+
+  for await (const f of getFiles(docsDir)) {
+    //process paths
+    const fParsed = path.parse(f);
+    if(fParsed.ext.match(/.mdx?$/)) {
+      const relativePath = f.replace(docsDir, "");
+      let pathArgs: Array<String> = relativePath.split(path.sep);
+      pathArgs.shift();
+      if(fParsed.name === "index") {
+        pathArgs.pop();
+      } else {
+        pathArgs[pathArgs.length - 1] = fParsed.name; 
+      }
+      paths.push({params: {fileName: pathArgs}})
+    }
+  }
+  
   return {
     paths,
     fallback: false, // See the "fallback" section below
   };
 }
+
+async function* getFiles(dir) {
+  const dirents = await fsPromises.readdir(dir, { withFileTypes: true });
+  for (const dirent of dirents) {
+    const res = path.resolve(dir, dirent.name);
+    if (dirent.isDirectory()) {
+      yield* getFiles(res);
+    } else {
+      //do something to get the path link
+      yield res
+    }
+  }
+}
+
+
 export async function getStaticProps({ params }) {
-  const fileName = params.fileName[0];
-  // TODO: supports only .md at this point
-  const filePath = path.resolve("./src/content/docs", fileName + ".md"); // get file
+  const fileNames = params.fileName;
+  const docFolder = "./src/content/docs";
+  const fullPath = path.resolve(docFolder, ...fileNames)
+
+  let isFolder;
+  try {
+    await fsPromises.access(fullPath);
+    isFolder = true;
+  } catch {
+    isFolder = false;
+  }
+  
+  const filePath = (isFolder)?path.resolve(fullPath, "index.md"): fullPath + ".md";
   const source = await fsPromises.readFile(filePath, { encoding: "utf8" });
   // MDX text - can be from a local file, database, anywhere
   const { content, data } = matter(source);
